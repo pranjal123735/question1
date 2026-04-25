@@ -33,8 +33,8 @@ VEHICLE_LABELS = {"car", "truck", "bus", "motorcycle", "bicycle"}
 MOVING_SPEED_THRESHOLD_KMH = 1.8
 
 # YOLO inference (tune for fewer false positives; raise conf if still noisy)
-# Default to nano for cloud/free tiers; override with env if needed.
-YOLO_MODEL_NAME = os.environ.get("CAR_VISION_YOLO_MODEL", "yolov8n.pt")
+# Default small model; override with CAR_VISION_YOLO_MODEL if needed.
+YOLO_MODEL_NAME = os.environ.get("CAR_VISION_YOLO_MODEL", "yolov8s.pt")
 YOLO_CONF = float(os.environ.get("CAR_VISION_YOLO_CONF", "0.38"))
 YOLO_IOU = float(os.environ.get("CAR_VISION_YOLO_IOU", "0.5"))
 YOLO_MAX_DET = int(os.environ.get("CAR_VISION_YOLO_MAX_DET", "60"))

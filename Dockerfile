@@ -16,7 +16,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
-ENV CAR_VISION_YOLO_MODEL=yolov8n.pt
+ENV CAR_VISION_YOLO_MODEL=yolov8s.pt
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
@@ -28,7 +28,7 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install -r /app/backend/requirements.txt
 
 # Warm model at build time so startup on Render does not depend on first-request download.
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')"
 
 COPY backend /app/backend
 COPY --from=web_build /app/web-dist /app/web-dist
