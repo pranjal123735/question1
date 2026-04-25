@@ -32,6 +32,7 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +40,12 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# backend/runtime artifacts
+backend/.venv/
+backend/__pycache__/
+backend/*.pt
+
+# local deploy artifacts
+web-dist/
+deploy-package/
