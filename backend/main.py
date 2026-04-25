@@ -33,7 +33,8 @@ VEHICLE_LABELS = {"car", "truck", "bus", "motorcycle", "bicycle"}
 MOVING_SPEED_THRESHOLD_KMH = 1.8
 
 # YOLO inference (tune for fewer false positives; raise conf if still noisy)
-YOLO_MODEL_NAME = os.environ.get("CAR_VISION_YOLO_MODEL", "yolov8s.pt")
+# Default to nano for cloud/free tiers; override with env if needed.
+YOLO_MODEL_NAME = os.environ.get("CAR_VISION_YOLO_MODEL", "yolov8n.pt")
 YOLO_CONF = float(os.environ.get("CAR_VISION_YOLO_CONF", "0.38"))
 YOLO_IOU = float(os.environ.get("CAR_VISION_YOLO_IOU", "0.5"))
 YOLO_MAX_DET = int(os.environ.get("CAR_VISION_YOLO_MAX_DET", "60"))
@@ -136,11 +137,15 @@ class TrackState:
 
 
 MODEL = None
+MODEL_LOAD_ERROR: Optional[str] = None
 if YOLO is not None:
     try:
         MODEL = YOLO(YOLO_MODEL_NAME)
-    except Exception:
+    except Exception as e:
         MODEL = None
+        MODEL_LOAD_ERROR = str(e)
+else:
+    MODEL_LOAD_ERROR = "ultralytics import failed"
 
 TRACKS: Dict[int, TrackState] = {}
 NEXT_ID = 1
@@ -437,6 +442,7 @@ def health() -> dict:
         "mode": "yolo" if MODEL is not None else "demo",
         "message": "Backend ready",
         "model": YOLO_MODEL_NAME if MODEL else None,
+        "model_load_error": MODEL_LOAD_ERROR,
         "yolo_conf": YOLO_CONF,
         "max_det": YOLO_MAX_DET,
         "calibration": CALIBRATION.model_dump(),

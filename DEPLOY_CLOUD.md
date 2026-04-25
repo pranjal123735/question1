@@ -71,3 +71,13 @@ Open:
 - Frontend uses same-origin backend by default (`window.location.origin`), so one-container deploy works out of the box.
 - If you run behind reverse proxy, keep forwarded headers configured normally.
 - For production safety use, monitor latency/FPS and consider GPU instance or on-edge fallback.
+
+## Render-specific troubleshooting
+
+If `/health` shows:
+- `"mode":"demo"`
+- `"model": null`
+
+check `"model_load_error"` from `/health` and redeploy with:
+- lighter model: `CAR_VISION_YOLO_MODEL=yolov8n.pt`
+- Docker image including OpenCV runtime libs (`libglib2.0-0`, `libgl1`, `libgomp1`)
