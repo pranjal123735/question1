@@ -1,0 +1,8 @@
+staticSites:
+  - name: camera-app-frontend
+    buildCommand: npm install --legacy-peer-deps && npm run build:web
+    publishDir: web-dist
+    envVars:
+      - key: EXPO_PUBLIC_BACKEND_URL
+        sync: false
+        value: https://REPLACE_WITH_YOUR_NGROK_URL.ngrok-free.dev

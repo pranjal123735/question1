@@ -1,6 +1,27 @@
 # Cloud Server Options + Deployment
 
-This project is now ready to deploy as **one container** (backend + frontend).
+## Frontend-only on Render (recommended for your current setup)
+
+You are currently running backend on local machine via ngrok, so deploy only the frontend to Render static hosting.
+
+### Steps
+
+1. Push latest code to GitHub (already includes `render.yaml`).
+2. In Render: **New +** -> **Blueprint** -> connect repo.
+3. Render will detect `render.yaml` and create static site `camera-app-frontend`.
+4. In Render env vars, set:
+   - `EXPO_PUBLIC_BACKEND_URL=https://uncleansed-overserene-elijah.ngrok-free.dev`
+5. Deploy.
+6. Open Render frontend URL and test detection.
+
+### Important
+
+- Keep your local backend + ngrok running, otherwise frontend cannot call API.
+- If ngrok URL changes, only update `EXPO_PUBLIC_BACKEND_URL` in Render and redeploy.
+
+---
+
+This project is also ready to deploy as **one container** (backend + frontend).
 
 ## Best server choices (for your project)
 
