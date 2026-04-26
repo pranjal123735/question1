@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+const DEFAULT_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8001';
+
 function MetricCard({ item }) {
   return (
     <View style={styles.card}>
@@ -19,7 +21,7 @@ function MetricCard({ item }) {
 }
 
 export default function App() {
-  const [backendUrl, setBackendUrl] = useState('https://uncleansed-overserene-elijah.ngrok-free.dev');
+  const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
   const [status, setStatus] = useState('Idle');
   const [detections, setDetections] = useState([]);
   const [error, setError] = useState(null);

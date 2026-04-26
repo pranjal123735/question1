@@ -14,6 +14,9 @@ import {
 
 const CAPTURE_INTERVAL_MS = 450;
 const ALERT_COOLDOWN_MS = 5000;
+const DEFAULT_BACKEND_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
+  (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8001');
 
 /** Web-only glass panel (react-native-web). */
 const HUD_SHEET_GLASS =
@@ -108,7 +111,7 @@ export default function App() {
   const canvasRef = useRef(null);
   const timerRef = useRef(0);
   const inFlightRef = useRef(false);
-  const [backendUrl, setBackendUrl] = useState('https://uncleansed-overserene-elijah.ngrok-free.dev');
+  const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
   const [status, setStatus] = useState('Starting camera...');
   const [detections, setDetections] = useState([]);
   const [layout, setLayout] = useState({ w: 0, h: 0 });
