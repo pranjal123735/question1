@@ -48,4 +48,5 @@ backend/*.pt
 
 # local deploy artifacts
 web-dist/
+web-dist-test/
 deploy-package/

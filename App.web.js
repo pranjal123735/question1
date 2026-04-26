@@ -11,6 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import BirdseyeSceneWeb from './BirdseyeScene.web';
 
 const CAPTURE_INTERVAL_MS = 450;
 const ALERT_COOLDOWN_MS = 5000;
@@ -136,6 +137,8 @@ export default function App() {
   const [pipelineMs, setPipelineMs] = useState(0);
   /** @type {null | 'main' | 'radar' | 'cal' | 'trip' | 'threat'} */
   const [expandedPanel, setExpandedPanel] = useState(null);
+  /** Full-screen animated ride view (front-cam sim); opened from floating control. */
+  const [rideScreenOpen, setRideScreenOpen] = useState(false);
   const [lastTripSnapshot, setLastTripSnapshot] = useState(null);
   const [tripDetail, setTripDetail] = useState(null);
   /** Rolling threat score 0–100 for bottom sparkline (client-side). */
@@ -589,7 +592,34 @@ export default function App() {
     return Math.max(0, Math.min(100, (cx / Math.max(1, frameSize.w)) * 100));
   }, [top, frameSize.w]);
 
-  const showIdleAtmosphere = !expandedPanel && detections.length === 0;
+  const showIdleAtmosphere =
+    !expandedPanel && !rideScreenOpen && detections.length === 0 && !isRunning;
+  const showMainHud = !expandedPanel && !rideScreenOpen;
+
+  useEffect(() => {
+    if (expandedPanel) {
+      setRideScreenOpen(false);
+    }
+  }, [expandedPanel]);
+
+  /** Hide live camera under birds-eye so the 3D view is full-screen (Tesla-style). */
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') {
+      return undefined;
+    }
+    const v = videoRef.current;
+    if (!v) return undefined;
+    if (rideScreenOpen) {
+      v.style.visibility = 'hidden';
+    } else {
+      v.style.visibility = 'visible';
+    }
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.style.visibility = 'visible';
+      }
+    };
+  }, [rideScreenOpen]);
 
   return (
     <View
@@ -601,11 +631,61 @@ export default function App() {
         setLayout({ w: width, h: height });
       }}
     >
-      {!expandedPanel ? (
+      {!expandedPanel && !rideScreenOpen ? (
         <View
           pointerEvents="none"
           style={[styles.hudStateTint, isRunning ? styles.hudStateTintLive : styles.hudStateTintIdle]}
         />
+      ) : null}
+
+      {rideScreenOpen && !expandedPanel ? (
+        <>
+          <View style={styles.rideVideoCurtain} pointerEvents="none" />
+          <View style={styles.rideFullscreenShell} pointerEvents="none">
+            <View pointerEvents="none" style={[styles.rideVisionLayer, styles.rideVisionLayerFullscreen]}>
+              {Platform.OS === 'web' ? (
+                <BirdseyeSceneWeb
+                  width={layout.w || winW}
+                  height={layout.h || winH}
+                  detections={detections}
+                  frameSize={frameSize}
+                  isRunning={isRunning}
+                />
+              ) : null}
+              <View style={styles.rideTopBadge} pointerEvents="none">
+                <Text style={styles.rideTopBadgeTitle}>BIRDS-EYE · LIVE</Text>
+                <Text style={styles.rideTopBadgeSub}>
+                  {isRunning
+                    ? 'Camera hidden · full-screen sim · rings · sweep · tethers'
+                    : 'STBY · camera hidden in this view · start tracking for voxels'}
+                </Text>
+              </View>
+            </View>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close ride view"
+            onPress={() => setRideScreenOpen(false)}
+            style={({ pressed }) => [styles.rideFullscreenClose, pressed && styles.rideFullscreenClosePressed]}
+          >
+            <Text style={styles.rideFullscreenCloseGlyph}>✕</Text>
+          </Pressable>
+        </>
+      ) : null}
+
+      {showMainHud ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open full-screen ride view"
+          onPress={() => setRideScreenOpen(true)}
+          style={({ pressed }) => [
+            styles.rideFloatFab,
+            { bottom: fabBaseBottom },
+            pressed && styles.rideFloatFabPressed,
+          ]}
+        >
+          <Text style={styles.rideFloatFabGlyph}>◉</Text>
+        </Pressable>
       ) : null}
 
       {showIdleAtmosphere ? (
@@ -663,7 +743,7 @@ export default function App() {
         </View>
       ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View style={[styles.hudTelemetryBar, compact && styles.hudTelemetryBarCompact]} pointerEvents="none">
           <Text style={styles.hudTelLeft}>{isRunning ? `LIVE ${fps.toFixed(1)} FPS` : 'STANDBY'}</Text>
           <Text style={[styles.hudTelMid, compact && styles.hudTelMidCompact]}>
@@ -683,7 +763,7 @@ export default function App() {
         </View>
       ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View style={[styles.hudThreatLadder, compact && styles.hudThreatLadderCompact]} pointerEvents="none">
           <Text style={styles.hudPanelTitle}>THREAT LADDER</Text>
           {threatLadder.length === 0 ? (
@@ -702,7 +782,7 @@ export default function App() {
         </View>
       ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View style={[styles.hudGuidanceBar, compact && styles.hudGuidanceBarCompact]} pointerEvents="none">
           <Text style={styles.hudPanelTitle}>LANE GUIDANCE</Text>
           <View style={styles.hudGuidanceTrack}>
@@ -715,7 +795,7 @@ export default function App() {
         </View>
       ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View style={[styles.hudSystemCard, compact && styles.hudSystemCardCompact]} pointerEvents="none">
           <Text style={styles.hudPanelTitle}>SYSTEM</Text>
           <Text style={[styles.hudSystemLine, compact && styles.hudSystemLineCompact]}>
@@ -741,7 +821,8 @@ export default function App() {
         </View>
       ) : null}
 
-      <View style={styles.boxLayer} pointerEvents="none">
+      {!rideScreenOpen ? (
+        <View style={styles.boxLayer} pointerEvents="none">
         {detections.map((d, idx) => {
           const box = mapBoxToOverlay(d.bbox_xyxy, frameSize.w, frameSize.h, layout.w, layout.h);
           const band = detectionBand(d);
@@ -776,9 +857,10 @@ export default function App() {
             </View>
           );
         })}
-      </View>
+        </View>
+      ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View
           pointerEvents="none"
           style={[
@@ -872,7 +954,7 @@ export default function App() {
         </View>
       ) : null}
 
-      {!expandedPanel ? (
+      {showMainHud ? (
         <View
           pointerEvents="none"
           style={[
@@ -885,7 +967,7 @@ export default function App() {
         />
       ) : null}
 
-      {!expandedPanel
+      {showMainHud
         ? fabStack.map((fab, i) => (
             <Pressable
               key={fab.id}
@@ -1727,6 +1809,103 @@ const styles = StyleSheet.create({
   hudSystemLineCompact: {
     fontSize: 10,
     marginBottom: 1,
+  },
+  rideVideoCurtain: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 35,
+    backgroundColor: '#020617',
+  },
+  rideFullscreenShell: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+  },
+  rideVisionLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 6,
+    overflow: 'visible',
+  },
+  rideVisionLayerFullscreen: {
+    ...StyleSheet.absoluteFillObject,
+    bottom: 0,
+  },
+  rideFullscreenClose: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 50,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(3, 7, 18, 0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 211, 238, 0.45)',
+  },
+  rideFullscreenClosePressed: {
+    backgroundColor: 'rgba(8, 51, 68, 0.92)',
+  },
+  rideFullscreenCloseGlyph: {
+    color: '#E0F2FE',
+    fontSize: 22,
+    fontWeight: '700',
+    marginTop: -1,
+  },
+  rideFloatFab: {
+    position: 'absolute',
+    left: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    zIndex: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(3, 7, 18, 0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(45, 212, 191, 0.55)',
+    shadowColor: '#22D3EE',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  rideFloatFabPressed: {
+    backgroundColor: 'rgba(8, 51, 68, 0.95)',
+    borderColor: 'rgba(34, 211, 238, 0.75)',
+  },
+  rideFloatFabGlyph: {
+    color: '#5EEAD4',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  rideTopBadge: {
+    position: 'absolute',
+    top: 50,
+    left: 12,
+    zIndex: 4,
+    maxWidth: 220,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 211, 238, 0.35)',
+    backgroundColor: 'rgba(3, 7, 18, 0.55)',
+  },
+  rideTopBadgeTitle: {
+    color: '#22D3EE',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.6,
+    fontFamily: Platform.OS === 'web' ? 'Orbitron, sans-serif' : undefined,
+  },
+  rideTopBadgeSub: {
+    color: 'rgba(165, 243, 252, 0.85)',
+    fontSize: 9,
+    marginTop: 3,
+    fontFamily: Platform.OS === 'web' ? 'Rajdhani, system-ui, sans-serif' : undefined,
+    fontWeight: '600',
   },
   hudBottomDock: {
     position: 'absolute',
