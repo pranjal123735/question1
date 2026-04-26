@@ -25,6 +25,7 @@
     "react-native-vision-camera": "^5.0.6",
     "react-native-web": "^0.21.2",
     "react-native-worklets-core": "^1.6.3",
+    "serve": "^14.2.6",
     "vision-camera-resize-plugin": "^3.2.0"
   },
   "private": true,
