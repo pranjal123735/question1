@@ -108,9 +108,7 @@ export default function App() {
   const canvasRef = useRef(null);
   const timerRef = useRef(0);
   const inFlightRef = useRef(false);
-  const [backendUrl, setBackendUrl] = useState(() =>
-    typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8001'
-  );
+  const [backendUrl, setBackendUrl] = useState('https://uncleansed-overserene-elijah.ngrok-free.dev');
   const [status, setStatus] = useState('Starting camera...');
   const [detections, setDetections] = useState([]);
   const [layout, setLayout] = useState({ w: 0, h: 0 });
@@ -140,6 +138,15 @@ export default function App() {
   const [threatHistory, setThreatHistory] = useState([]);
 
   const normalizedUrl = useMemo(() => backendUrl.replace(/\/+$/, ''), [backendUrl]);
+  const ngrokHeaders = useMemo(
+    () =>
+      normalizedUrl.includes('ngrok-free.dev') ? { 'ngrok-skip-browser-warning': 'true' } : null,
+    [normalizedUrl]
+  );
+  const withTunnelHeaders = (init = {}) => {
+    if (!ngrokHeaders) return init;
+    return { ...init, headers: { ...(init.headers || {}), ...ngrokHeaders } };
+  };
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -233,7 +240,7 @@ export default function App() {
   useEffect(() => {
     const loadCalibration = async () => {
       try {
-        const res = await fetch(`${normalizedUrl}/calibration`);
+        const res = await fetch(`${normalizedUrl}/calibration`, withTunnelHeaders());
         if (!res.ok) return;
         const cfg = await res.json();
         setCalibration({
@@ -256,7 +263,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${normalizedUrl}/trip/stats`);
+        const res = await fetch(`${normalizedUrl}/trip/stats`, withTunnelHeaders());
         if (!res.ok || cancelled) return;
         const j = await res.json();
         if (!cancelled) setTripDetail(j);
@@ -294,10 +301,13 @@ export default function App() {
 
       const form = new FormData();
       form.append('file', blob, 'frame.jpg');
-      const res = await fetch(`${normalizedUrl}/analyze-image`, {
+      const res = await fetch(
+        `${normalizedUrl}/analyze-image`,
+        withTunnelHeaders({
         method: 'POST',
         body: form,
-      });
+        })
+      );
       if (!res.ok) {
         throw new Error(`Backend HTTP ${res.status}`);
       }
@@ -391,8 +401,8 @@ export default function App() {
 
   const resetTripStats = async () => {
     try {
-      await fetch(`${normalizedUrl}/trip/reset`, { method: 'POST' });
-      const res = await fetch(`${normalizedUrl}/trip/stats`);
+      await fetch(`${normalizedUrl}/trip/reset`, withTunnelHeaders({ method: 'POST' }));
+      const res = await fetch(`${normalizedUrl}/trip/stats`, withTunnelHeaders());
       if (res.ok) {
         const j = await res.json();
         setTripDetail(j);
@@ -418,11 +428,14 @@ export default function App() {
         meters_per_px: Number(calibration.meters_per_px),
         default_object_height_m: Number(calibration.default_object_height_m),
       };
-      const res = await fetch(`${normalizedUrl}/calibration`, {
+      const res = await fetch(
+        `${normalizedUrl}/calibration`,
+        withTunnelHeaders({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+        })
+      );
       if (!res.ok) throw new Error(`Calibration HTTP ${res.status}`);
       setStatus('Calibration saved');
       setError(null);

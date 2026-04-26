@@ -19,18 +19,25 @@ function MetricCard({ item }) {
 }
 
 export default function App() {
-  const [backendUrl, setBackendUrl] = useState('http://127.0.0.1:8001');
+  const [backendUrl, setBackendUrl] = useState('https://uncleansed-overserene-elijah.ngrok-free.dev');
   const [status, setStatus] = useState('Idle');
   const [detections, setDetections] = useState([]);
   const [error, setError] = useState(null);
 
   const normalizedUrl = useMemo(() => backendUrl.replace(/\/+$/, ''), [backendUrl]);
+  const requestInit = useMemo(
+    () =>
+      normalizedUrl.includes('ngrok-free.dev')
+        ? { headers: { 'ngrok-skip-browser-warning': 'true' } }
+        : undefined,
+    [normalizedUrl]
+  );
 
   const checkBackend = async () => {
     try {
       setError(null);
       setStatus('Checking backend...');
-      const res = await fetch(`${normalizedUrl}/health`);
+      const res = await fetch(`${normalizedUrl}/health`, requestInit);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -46,7 +53,7 @@ export default function App() {
     try {
       setError(null);
       setStatus('Fetching demo detections...');
-      const res = await fetch(`${normalizedUrl}/demo-detections`);
+      const res = await fetch(`${normalizedUrl}/demo-detections`, requestInit);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
