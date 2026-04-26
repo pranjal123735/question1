@@ -14,6 +14,7 @@ import {
 
 const CAPTURE_INTERVAL_MS = 450;
 const ALERT_COOLDOWN_MS = 5000;
+const RADAR_GHOST_MS = 480;
 const DEFAULT_BACKEND_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
   (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8001');
@@ -139,6 +140,11 @@ export default function App() {
   const [tripDetail, setTripDetail] = useState(null);
   /** Rolling threat score 0–100 for bottom sparkline (client-side). */
   const [threatHistory, setThreatHistory] = useState([]);
+  /** Backend frame quality hints (glare / low light / low contrast). */
+  const [frameDiagnostics, setFrameDiagnostics] = useState(null);
+  /** Fading radar dots for tracks that just disappeared (reduces empty flicker). */
+  const [radarGhosts, setRadarGhosts] = useState([]);
+  const prevDetectionsRef = useRef([]);
 
   const normalizedUrl = useMemo(() => backendUrl.replace(/\/+$/, ''), [backendUrl]);
   const ngrokHeaders = useMemo(
@@ -316,6 +322,30 @@ export default function App() {
       }
       const body = await res.json();
       const all = body.detections || [];
+      setFrameDiagnostics(body.frame_diagnostics ?? null);
+
+      const gNow = Date.now();
+      const liveIds = new Set(all.map((d) => d.track_id));
+      setRadarGhosts((ghosts) => {
+        let next = ghosts.filter((g) => g.expiresAt > gNow && !liveIds.has(g.track_id));
+        const prev = prevDetectionsRef.current;
+        for (const pd of prev) {
+          if (!liveIds.has(pd.track_id)) {
+            const p = radarPoint(pd, fw, fh);
+            next = next.filter((g) => g.track_id !== pd.track_id);
+            next.push({
+              track_id: pd.track_id,
+              xNorm: p.xNorm,
+              yNorm: p.yNorm,
+              band: detectionBand(pd),
+              expiresAt: gNow + RADAR_GHOST_MS,
+            });
+          }
+        }
+        prevDetectionsRef.current = all;
+        return next.slice(-24);
+      });
+
       const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
       setPipelineMs((prev) => (prev ? prev * 0.72 + (t1 - t0) * 0.28 : t1 - t0));
       const nowMs = Date.now();
@@ -697,6 +727,14 @@ export default function App() {
           <Text style={[styles.hudSystemLine, compact && styles.hudSystemLineCompact]}>
             Voice {voiceEnabled ? 'ON' : 'OFF'}
           </Text>
+          {frameDiagnostics ? (
+            <Text style={[styles.hudSystemLine, compact && styles.hudSystemLineCompact]} numberOfLines={1}>
+              Scene {frameDiagnostics.quality_hint}
+              {!compact
+                ? ` · br ${Math.round((frameDiagnostics.brightness_01 || 0) * 100)}%`
+                : ''}
+            </Text>
+          ) : null}
           {!compact ? (
             <Text style={styles.hudSystemLine}>Backend {backendUrl.replace(/^https?:\/\//, '')}</Text>
           ) : null}
@@ -731,7 +769,8 @@ export default function App() {
                 >
                   {d.label} #{d.track_id} | {Number(d.distance_m).toFixed(1)}m |{' '}
                   {d.is_moving ? `${Number(d.speed_kmh).toFixed(0)}km/h` : 'static'} |{' '}
-                  {Math.round(Number(d.risk_percent))}% | {band} | T{score}
+                  {Math.round(Number(d.risk_percent))}% | {band} | T{score} | A{' '}
+                  {Number(d.track_age_s ?? 0).toFixed(1)}s
                 </Text>
               </View>
             </View>
@@ -799,6 +838,25 @@ export default function App() {
                       left: `${left}%`,
                       top: `${topPct}%`,
                       backgroundColor: riskColor(band),
+                    },
+                  ]}
+                />
+              );
+            })}
+            {radarGhosts.map((g) => {
+              const left = g.xNorm * 100;
+              const topPct = g.yNorm * 100;
+              const fade = Math.max(0.08, Math.min(0.45, (g.expiresAt - Date.now()) / RADAR_GHOST_MS * 0.45));
+              return (
+                <View
+                  key={`dock-ghost-${g.track_id}`}
+                  style={[
+                    styles.hudDockDot,
+                    {
+                      left: `${left}%`,
+                      top: `${topPct}%`,
+                      backgroundColor: riskColor(g.band),
+                      opacity: fade,
                     },
                   ]}
                 />
@@ -972,6 +1030,26 @@ export default function App() {
                             left: `${left}%`,
                             top: `${topPct}%`,
                             backgroundColor: riskColor(band),
+                          },
+                        ]}
+                      />
+                    );
+                  })}
+                  {radarGhosts.map((g) => {
+                    const left = g.xNorm * 100;
+                    const topPct = g.yNorm * 100;
+                    const fade = Math.max(0.08, Math.min(0.45, (g.expiresAt - Date.now()) / RADAR_GHOST_MS * 0.45));
+                    return (
+                      <View
+                        key={`radar-ghost-${g.track_id}`}
+                        style={[
+                          styles.radarDot,
+                          compact && styles.radarDotSmall,
+                          {
+                            left: `${left}%`,
+                            top: `${topPct}%`,
+                            backgroundColor: riskColor(g.band),
+                            opacity: fade,
                           },
                         ]}
                       />

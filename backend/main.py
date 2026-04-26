@@ -35,10 +35,25 @@ MOVING_SPEED_THRESHOLD_KMH = 1.8
 # YOLO inference (tune for fewer false positives; raise conf if still noisy)
 # Default small model; override with CAR_VISION_YOLO_MODEL if needed.
 YOLO_MODEL_NAME = os.environ.get("CAR_VISION_YOLO_MODEL", "yolov8s.pt")
+# Higher = fewer false boxes (better label accuracy). Lower via env only if you need more recall on tiny/distant objects.
 YOLO_CONF = float(os.environ.get("CAR_VISION_YOLO_CONF", "0.38"))
 YOLO_IOU = float(os.environ.get("CAR_VISION_YOLO_IOU", "0.5"))
 YOLO_MAX_DET = int(os.environ.get("CAR_VISION_YOLO_MAX_DET", "60"))
 YOLO_IMGSZ = int(os.environ.get("CAR_VISION_YOLO_IMGSZ", "640"))
+# Slower (~2× infer) but can slightly improve robustness; use when you care more about detection than FPS.
+YOLO_TTA = os.environ.get("CAR_VISION_YOLO_TTA", "").lower() in ("1", "true", "yes")
+
+# Set CAR_VISION_DISABLE_PERSON_FP_FILTER=1 only if you want maximum recall (more wrong "person" boxes possible).
+DISABLE_PERSON_FP_FILTER = os.environ.get("CAR_VISION_DISABLE_PERSON_FP_FILTER", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Monocular height: when bbox is tall vs frame, visible extent is often << nominal object height (e.g. face vs 1.7m person).
+DISTANCE_CLOSE_FRAC = float(os.environ.get("CAR_VISION_DISTANCE_CLOSE_FRAC", "0.14"))
+DISTANCE_MIN_M = float(os.environ.get("CAR_VISION_DISTANCE_MIN_M", "0.08"))
+DISTANCE_MAX_M = float(os.environ.get("CAR_VISION_DISTANCE_MAX_M", "120.0"))
 
 # Temporal smoothing: stable class over last N frames (reduces phone↔person flicker)
 CLASS_HISTORY_LEN = int(os.environ.get("CAR_VISION_CLASS_HISTORY", "7"))
@@ -54,6 +69,8 @@ PERSON_TALL_NARROW_MAX_CONF = float(os.environ.get("CAR_VISION_PERSON_TALL_MAX_C
 # IoU: if person overlaps cell phone and phone scores reasonably, drop person
 PHONE_PERSON_IOU = float(os.environ.get("CAR_VISION_PHONE_PERSON_IOU", "0.25"))
 PHONE_PERSON_CONF_RATIO = float(os.environ.get("CAR_VISION_PHONE_CONF_RATIO", "0.85"))
+
+API_VERSION = "0.4.0"
 
 app = FastAPI(title="Car Vision Backend", version="0.3.0")
 app.add_middleware(
@@ -75,6 +92,18 @@ class DetectionOut(BaseModel):
     is_moving: bool
     ttc_s: float
     risk_percent: float
+    track_age_s: float = 0.0
+
+
+class FrameDiagnostics(BaseModel):
+    """Cheap frame stats so the client can warn when ranging/detection is less reliable."""
+
+    brightness_01: float
+    texture_variance: float
+    low_light: bool
+    glare_risk: bool
+    low_contrast: bool
+    quality_hint: str
 
 
 class TripSnapshot(BaseModel):
@@ -113,6 +142,8 @@ class AnalyzeResponse(BaseModel):
     frame_time_s: float
     detections: List[DetectionOut]
     trip: TripSnapshot
+    api_version: str = API_VERSION
+    frame_diagnostics: Optional[FrameDiagnostics] = None
 
 
 class CalibrationConfig(BaseModel):
@@ -148,6 +179,7 @@ else:
     MODEL_LOAD_ERROR = "ultralytics import failed"
 
 TRACKS: Dict[int, TrackState] = {}
+TRACK_FIRST_SEEN_S: Dict[int, float] = {}
 NEXT_ID = 1
 # Per track: deque of (raw_model_label, confidence) from YOLO — output label is smoothed, never random
 TRACK_CLASS_HIST: Dict[int, Deque[Tuple[str, float]]] = defaultdict(
@@ -169,7 +201,7 @@ TRIP_EVENTS: Deque[dict] = deque(maxlen=TRIP_EVENTS_MAX)
 _LAST_NEAR_MISS_LOG: Dict[str, float] = {}
 
 CALIBRATION = CalibrationConfig(
-    focal_like=900.0,
+    focal_like=float(os.environ.get("CAR_VISION_DEFAULT_FOCAL_LIKE", "900.0")),
     meters_per_px=0.05,
     default_object_height_m=1.5,
     object_heights_m={
@@ -183,12 +215,27 @@ CALIBRATION = CalibrationConfig(
 )
 
 
-def estimate_distance_m(label: str, bbox_xyxy: Tuple[float, float, float, float]) -> float:
-    x1, y1, x2, y2 = bbox_xyxy
+def estimate_distance_m(
+    label: str,
+    bbox_xyxy: Tuple[float, float, float, float],
+    frame_w: float,
+    frame_h: float,
+) -> float:
+    """
+    Pinhole-ish ranging from bbox vertical span. When the box is large vs frame height,
+    the visible real-world extent is usually much smaller than nominal class height
+    (e.g. close-up face vs full 1.7m person), so we shrink effective height to avoid
+    overstating distance.
+    """
+    _x1, y1, _x2, y2 = bbox_xyxy
     h = max(y2 - y1, 1.0)
+    fh = max(frame_h, 1.0)
     obj_h_m = CALIBRATION.object_heights_m.get(label, CALIBRATION.default_object_height_m)
-    distance = (obj_h_m * CALIBRATION.focal_like) / h
-    return float(max(1.0, min(distance, 120.0)))
+    # 1.0 when object is small on screen; <1 when it fills many rows (close / partial subject).
+    shrink = min(1.0, (DISTANCE_CLOSE_FRAC * fh) / h)
+    effective_h_m = obj_h_m * shrink
+    distance = (effective_h_m * CALIBRATION.focal_like) / h
+    return float(max(DISTANCE_MIN_M, min(distance, DISTANCE_MAX_M)))
 
 
 def ttc_and_risk(distance_m: float, speed_kmh: float) -> Tuple[float, float]:
@@ -304,6 +351,40 @@ def reset_trip_state() -> None:
 def centroid(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
     x1, y1, x2, y2 = bbox
     return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+
+def compute_frame_diagnostics(frame: "np.ndarray") -> FrameDiagnostics:
+    """Lightweight scene cues from the RGB frame (no extra model)."""
+    gray = np.mean(frame.astype(np.float32), axis=2)
+    step = max(1, int(min(gray.shape[0], gray.shape[1]) / 90))
+    small = gray[::step, ::step]
+    brightness_01 = float(np.clip(small.mean() / 255.0, 0.0, 1.0))
+    texture_variance = float(np.var(small))
+    bright_frac = float((small >= 235.0).mean())
+    low_light = brightness_01 < 0.11
+    glare_risk = bright_frac > 0.085
+    low_contrast = texture_variance < 12.0
+    hints: List[str] = []
+    if low_light:
+        hints.append("low_light")
+    if glare_risk:
+        hints.append("glare")
+    if low_contrast:
+        hints.append("low_contrast")
+    if len(hints) > 1:
+        quality_hint = "mixed"
+    elif hints:
+        quality_hint = hints[0]
+    else:
+        quality_hint = "ok"
+    return FrameDiagnostics(
+        brightness_01=brightness_01,
+        texture_variance=texture_variance,
+        low_light=low_light,
+        glare_risk=glare_risk,
+        low_contrast=low_contrast,
+        quality_hint=quality_hint,
+    )
 
 
 def bbox_iou_xyxy(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
@@ -439,12 +520,15 @@ def resolve_person_cell_phone_conflicts(
 def health() -> dict:
     return {
         "ok": True,
+        "api_version": API_VERSION,
         "mode": "yolo" if MODEL is not None else "demo",
         "message": "Backend ready",
         "model": YOLO_MODEL_NAME if MODEL else None,
         "model_load_error": MODEL_LOAD_ERROR,
         "yolo_conf": YOLO_CONF,
         "max_det": YOLO_MAX_DET,
+        "yolo_tta": YOLO_TTA,
+        "disable_person_fp_filter": DISABLE_PERSON_FP_FILTER,
         "calibration": CALIBRATION.model_dump(),
     }
 
@@ -502,13 +586,22 @@ def trip_reset() -> dict:
 @app.post("/analyze-image", response_model=AnalyzeResponse)
 async def analyze_image(file: UploadFile = File(...)) -> AnalyzeResponse:
     now_s = time.time()
-    if MODEL is None or np is None or Image is None:
+    if np is None or Image is None:
         return AnalyzeResponse(frame_time_s=now_s, detections=[], trip=trip_snapshot(now_s))
 
     raw = await file.read()
     image = Image.open(io_bytes(raw)).convert("RGB")
     frame = np.array(image)
     fh, fw = float(frame.shape[0]), float(frame.shape[1])
+    diagnostics = compute_frame_diagnostics(frame)
+
+    if MODEL is None:
+        return AnalyzeResponse(
+            frame_time_s=now_s,
+            detections=[],
+            trip=trip_snapshot(now_s),
+            frame_diagnostics=diagnostics,
+        )
 
     results = MODEL.predict(
         frame,
@@ -517,7 +610,7 @@ async def analyze_image(file: UploadFile = File(...)) -> AnalyzeResponse:
         iou=YOLO_IOU,
         max_det=YOLO_MAX_DET,
         imgsz=YOLO_IMGSZ,
-        augment=False,
+        augment=YOLO_TTA,
     )
 
     raw_rows: List[Tuple[str, float, Tuple[float, float, float, float]]] = []
@@ -530,7 +623,7 @@ async def analyze_image(file: UploadFile = File(...)) -> AnalyzeResponse:
             conf = float(b.conf[0].item())
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
             bbox = (x1, y1, x2, y2)
-            if not person_false_positive_filter(label, conf, bbox, fw, fh):
+            if not DISABLE_PERSON_FP_FILTER and not person_false_positive_filter(label, conf, bbox, fw, fh):
                 continue
             raw_rows.append((label, conf, bbox))
 
@@ -545,12 +638,15 @@ async def analyze_image(file: UploadFile = File(...)) -> AnalyzeResponse:
         if tid is None:
             tid = NEXT_ID
             NEXT_ID += 1
+        if tid not in TRACK_FIRST_SEEN_S:
+            TRACK_FIRST_SEEN_S[tid] = now_s
+        track_age_s = max(0.0, now_s - TRACK_FIRST_SEEN_S[tid])
         speed_mps = update_track(tid, cx, cy, now_s)
         speed_kmh_raw = max(0.0, speed_mps * 3.6)
         is_moving = speed_kmh_raw >= MOVING_SPEED_THRESHOLD_KMH
         speed_kmh = speed_kmh_raw if is_moving else 0.0
         smooth_label, smooth_conf = smooth_label_from_history(tid, label, conf)
-        distance_m = estimate_distance_m(smooth_label, bbox)
+        distance_m = estimate_distance_m(smooth_label, bbox, fw, fh)
 
         if smooth_label in VEHICLE_LABELS and is_moving:
             ttc_s, risk = ttc_and_risk(distance_m, speed_kmh)
@@ -569,12 +665,18 @@ async def analyze_image(file: UploadFile = File(...)) -> AnalyzeResponse:
                 is_moving=is_moving,
                 ttc_s=ttc_s,
                 risk_percent=risk,
+                track_age_s=track_age_s,
             )
         )
 
     out.sort(key=lambda d: d.confidence, reverse=True)
     update_trip_stats(out, now_s)
-    return AnalyzeResponse(frame_time_s=now_s, detections=out, trip=trip_snapshot(now_s))
+    return AnalyzeResponse(
+        frame_time_s=now_s,
+        detections=out,
+        trip=trip_snapshot(now_s),
+        frame_diagnostics=diagnostics,
+    )
 
 
 def io_bytes(raw: bytes):
